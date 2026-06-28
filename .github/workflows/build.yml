@@ -7,6 +7,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# Needed so the workflow can publish the APK to a GitHub Release.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -29,8 +33,27 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: zzkeys-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      # On main, also publish the APK as a release asset. Unlike Actions artifacts
+      # (which always download as a .zip), a release asset downloads as the raw .apk,
+      # so the link below is directly tappable/installable on the phone. The "latest"
+      # tag rolls forward each build, so this URL is permanent and always newest:
+      #   https://github.com/bigjosh/zzkey/releases/latest/download/app-debug.apk
+      - name: Publish APK to "latest" release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest debug build
+          make_latest: true
+          body: |
+            Auto-built debug APK. On your phone, tap **app-debug.apk** below to install.
+
+            Permanent direct link (always the newest build):
+            https://github.com/bigjosh/zzkey/releases/latest/download/app-debug.apk
+          files: app/build/outputs/apk/debug/app-debug.apk

@@ -6,16 +6,20 @@ keyboard. Tap one to autocomplete the in-progress word.
 
 This is a personal prototype, meant to be sideloaded on your own device.
 
-## Build it with no PC
+## Install on the phone (no PC)
 
-1. Create a new GitHub repo and add all these files (use **Add file → Upload files**;
-   you can select multiple at once from your phone).
-2. GitHub Actions runs automatically on push. Or go to the **Actions** tab →
-   **Build APK** → **Run workflow**.
-3. When it finishes (green check), open the run → **Artifacts** → download
-   `zzkeys-debug-apk`. It downloads as a zip; your phone's file manager can extract
-   `app-debug.apk`.
-4. Tap the APK to install (allow installing from this source if prompted).
+Every push to `main` builds the app and publishes the APK to a GitHub Release. The
+easiest install is the permanent direct link (always serves the newest build):
+
+> **https://github.com/bigjosh/zzkey/releases/latest/download/app-debug.apk**
+
+Open that on the phone — it downloads the raw `.apk` (not a zip), and Android offers to
+install it (allow installing from this source if prompted). You can also browse to the
+repo's **Releases** page and tap `app-debug.apk` under the latest release.
+
+If you'd rather use the build artifact (e.g. for a branch build that doesn't publish a
+release): **Actions** tab → open the run → **Artifacts** → `zzkeys-debug-apk`. That one
+downloads as a zip you have to extract first.
 
 ## Turn it on
 
