@@ -26,13 +26,18 @@ This is a personal prototype, meant to be sideloaded on your own device.
 
 ## Change the keywords
 
-Edit `app/src/main/java/com/example/zzkeys/Keywords.kt`, commit, and the Action
-rebuilds a fresh APK.
+Easiest: open the **zzkeys** app, edit the **Keywords** box (one per line), and tap
+**Save keywords**. Changes take effect immediately — no rebuild, no reinstall.
+
+The built-in defaults live in `app/src/main/java/com/example/zzkeys/Keywords.kt`; the
+app only falls back to them until you save your own list.
 
 ## Known rough edges (it's a prototype)
 
-- The bar's vertical position is a fixed offset (`y = 720` in the service). If it
-  overlaps or floats away from Gboard on your screen, tune that number.
-- `TYPE_VIEW_TEXT_CHANGED` is inconsistent in some Jetpack Compose fields. Plain
-  `EditText` apps (and the built-in test box) are the reliable place to start.
+- The bar now positions itself just above the keyboard by reading the IME window's
+  bounds (`AccessibilityWindowInfo.TYPE_INPUT_METHOD`). If the keyboard window can't be
+  found it falls back to the screen bottom.
+- `TYPE_VIEW_TEXT_CHANGED` is inconsistent in some Jetpack Compose fields, so the service
+  also listens for `TYPE_WINDOW_CONTENT_CHANGED` and resolves the focused input node as a
+  fallback. Plain `EditText` apps (and the built-in test box) remain the reliable baseline.
 - Password fields won't expose text — by design.

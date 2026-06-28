@@ -2,12 +2,15 @@ package com.example.zzkeys
 
 import android.accessibilityservice.AccessibilityService
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -17,11 +20,17 @@ class KeywordAccessibilityService : AccessibilityService() {
     private val TAG = "zzkeys"
 
     private var windowManager: WindowManager? = null
-    private var bar: LinearLayout? = null
-    private var barShown = false
 
-    // The node we last saw being edited, so the tap handler knows where to write.
-    private var lastEditable: AccessibilityNodeInfo? = null
+    // The overlay is one window we add once and then show/hide. `scrollView` is the
+    // root we hand to WindowManager; `bar` is the button container inside it.
+    private var scrollView: HorizontalScrollView? = null
+    private var bar: LinearLayout? = null
+    private var layoutParams: WindowManager.LayoutParams? = null
+    private var barVisible = false
+
+    // Last matches rendered, so repeated events (esp. TYPE_WINDOW_CONTENT_CHANGED, which
+    // fires a lot) don't rebuild identical buttons and cause flicker.
+    private var lastMatches: List<String> = emptyList()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -31,30 +40,44 @@ class KeywordAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        if (event.eventType != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED &&
-            event.eventType != AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
-        ) return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> { /* handled below */ }
+            else -> return
+        }
 
-        val source = event.source ?: return
-        if (!source.isEditable) return
+        val node = editableNodeFor(event) ?: run { hideBar(); return }
 
-        val full = source.text?.toString() ?: ""
+        val full = node.text?.toString() ?: ""
         // Where is the cursor? Fall back to end of text.
-        val cursor = source.textSelectionEnd.let { if (it in 0..full.length) it else full.length }
-
+        val cursor = node.textSelectionEnd.let { if (it in 0..full.length) it else full.length }
         val token = currentToken(full, cursor)
         Log.d(TAG, "text='$full' cursor=$cursor token='$token'")
 
         if (token.length >= 2 && token.startsWith("zz", ignoreCase = true)) {
-            val matches = Keywords.ALL.filter { it.startsWith(token, ignoreCase = true) }
+            val matches = KeywordStore.load(this).filter { it.startsWith(token, ignoreCase = true) }
             Log.d(TAG, "matches=$matches")
             if (matches.isNotEmpty()) {
-                lastEditable = source
-                showBar(matches, full, token, cursor)
+                showBar(matches)
                 return
             }
         }
         hideBar()
+    }
+
+    /**
+     * Resolve the editable field this event refers to, or null if none.
+     *
+     * For plain EditText, `event.source` is the field. For Jetpack Compose fields,
+     * TYPE_VIEW_TEXT_CHANGED is unreliable and we lean on TYPE_WINDOW_CONTENT_CHANGED,
+     * whose source is often a container — so we fall back to the focused input node.
+     */
+    private fun editableNodeFor(event: AccessibilityEvent): AccessibilityNodeInfo? {
+        val src = event.source
+        if (src != null && src.isEditable) return src
+        val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        return if (focused != null && focused.isEditable) focused else null
     }
 
     /** Extract the word immediately left of the cursor (back to last whitespace). */
@@ -66,72 +89,125 @@ class KeywordAccessibilityService : AccessibilityService() {
         return text.substring(start, end)
     }
 
-    private fun showBar(
-        matches: List<String>,
-        fullText: String,
-        token: String,
-        cursor: Int
-    ) {
+    private fun showBar(matches: List<String>) {
         val wm = windowManager ?: return
-
-        if (bar == null) {
-            val container = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setBackgroundColor(0xFF202124.toInt())
-                setPadding(16, 12, 16, 12)
-            }
-            val scroll = HorizontalScrollView(this).apply { addView(container) }
-
-            val lp = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.BOTTOM
-                // Sits above the keyboard. Tune this offset if it overlaps Gboard.
-                y = 720
-            }
-
-            wm.addView(scroll, lp)
-            bar = container
-            barShown = true
-        }
-
+        ensureBar(wm)
         val container = bar ?: return
-        container.removeAllViews()
-        for (kw in matches) {
-            val b = Button(this).apply {
-                text = kw
-                isAllCaps = false
-                setOnClickListener { applyKeyword(kw, fullText, token, cursor) }
+
+        // Only rebuild buttons when the match set actually changed.
+        if (!(barVisible && matches == lastMatches)) {
+            container.removeAllViews()
+            for (kw in matches) {
+                val b = Button(this).apply {
+                    text = kw
+                    isAllCaps = false
+                    setOnClickListener { applyKeyword(kw) }
+                }
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { rightMargin = 12 }
+                container.addView(b, lp)
             }
-            container.addView(b)
+            lastMatches = matches
         }
-        if (!barShown) {
-            (container.parent as? android.view.View)?.visibility = android.view.View.VISIBLE
-            barShown = true
+
+        positionAboveKeyboard()
+        setBarVisible(true)
+    }
+
+    /** Create the overlay window once; subsequent shows just toggle visibility. */
+    private fun ensureBar(wm: WindowManager) {
+        if (scrollView != null) return
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(0xFF202124.toInt())
+            setPadding(16, 12, 16, 12)
         }
+        val scroll = HorizontalScrollView(this).apply { addView(container) }
+
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM
+            y = 0 // real position is set per-show in positionAboveKeyboard()
+        }
+
+        wm.addView(scroll, lp)
+        scrollView = scroll
+        bar = container
+        layoutParams = lp
+        barVisible = true
+    }
+
+    /**
+     * Park the bar just above the on-screen keyboard.
+     *
+     * With BOTTOM gravity, `y` is the gap between the screen bottom and the bar's bottom
+     * edge. We want the bar's bottom edge to sit at the keyboard's top edge, so
+     * y = screenHeight - imeTop. If we can't find the IME window we fall back to the
+     * screen bottom (y = 0) rather than a magic offset.
+     */
+    private fun positionAboveKeyboard() {
+        val wm = windowManager ?: return
+        val lp = layoutParams ?: return
+        val screenH = wm.currentWindowMetrics.bounds.height()
+        val imeTop = imeTopPx()
+        lp.y = if (imeTop in 1 until screenH) screenH - imeTop else 0
+        Log.d(TAG, "position imeTop=$imeTop screenH=$screenH y=${lp.y}")
+        scrollView?.let { wm.updateViewLayout(it, lp) }
+    }
+
+    /** Top edge (screen px) of the on-screen keyboard window, or -1 if not visible. */
+    private fun imeTopPx(): Int {
+        val wins = windows ?: return -1
+        val r = Rect()
+        for (w in wins) {
+            if (w.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                w.getBoundsInScreen(r)
+                if (r.height() > 0) return r.top
+            }
+        }
+        return -1
+    }
+
+    private fun setBarVisible(visible: Boolean) {
+        val v = scrollView ?: return
+        val target = if (visible) View.VISIBLE else View.GONE
+        if (v.visibility != target) v.visibility = target
+        barVisible = visible
     }
 
     private fun hideBar() {
-        val container = bar ?: return
-        if (barShown) {
-            (container.parent as? android.view.View)?.visibility = android.view.View.GONE
-            barShown = false
-        }
+        if (!barVisible) return
+        setBarVisible(false)
+        lastMatches = emptyList()
     }
 
-    /** Replace the in-progress token with the chosen keyword and move the cursor after it. */
-    private fun applyKeyword(keyword: String, fullText: String, token: String, cursor: Int) {
-        val node = lastEditable ?: return
-        val end = cursor.coerceIn(0, fullText.length)
-        val start = end - token.length
-        if (start < 0) return
+    /**
+     * Replace the in-progress token with the chosen keyword and move the cursor after it.
+     *
+     * We re-resolve the focused field and re-read its text here rather than trusting state
+     * captured when the bar was shown — the field may have changed, and re-fetching avoids
+     * holding a stale node across events.
+     */
+    private fun applyKeyword(keyword: String) {
+        val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (node == null || !node.isEditable) { hideBar(); return }
 
-        val newText = fullText.substring(0, start) + keyword + fullText.substring(end)
+        val full = node.text?.toString() ?: ""
+        val cursor = node.textSelectionEnd.let { if (it in 0..full.length) it else full.length }
+        val token = currentToken(full, cursor)
+        val start = cursor - token.length
+        if (start < 0 || !token.startsWith("zz", ignoreCase = true)) { hideBar(); return }
+
+        val newText = full.substring(0, start) + keyword + full.substring(cursor)
         val newCursor = start + keyword.length
 
         val args = Bundle().apply {
@@ -155,7 +231,9 @@ class KeywordAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        bar?.let { (it.parent as? android.view.View)?.let { v -> windowManager?.removeView(v) } }
+        scrollView?.let { windowManager?.removeView(it) }
+        scrollView = null
         bar = null
+        layoutParams = null
     }
 }
