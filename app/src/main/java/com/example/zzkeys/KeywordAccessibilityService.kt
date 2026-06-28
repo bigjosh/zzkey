@@ -4,6 +4,8 @@ import android.accessibilityservice.AccessibilityService
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -32,6 +34,14 @@ class KeywordAccessibilityService : AccessibilityService() {
     // fires a lot) don't rebuild identical buttons and cause flicker.
     private var lastMatches: List<String> = emptyList()
 
+    // Hiding is DEFERRED. Chatty apps (e.g. Amazon's live-suggestion search) fire bursts of
+    // TYPE_WINDOW_CONTENT_CHANGED events, and a single bad/transient read mid-burst used to
+    // hide the bar we'd just shown. Now a non-match schedules a hide a beat later, and the
+    // next matching keystroke cancels it — so momentary misreads never reach the screen.
+    private val handler = Handler(Looper.getMainLooper())
+    private val hideRunnable = Runnable { hideBar() }
+    private val hideDelayMs = 150L
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -47,7 +57,9 @@ class KeywordAccessibilityService : AccessibilityService() {
             else -> return
         }
 
-        val node = editableNodeFor(event) ?: run { hideBar(); return }
+        // Couldn't resolve a field this time (common on noisy TYPE_WINDOW_CONTENT_CHANGED
+        // events): treat it as "don't know yet", not "stop" — defer rather than hide now.
+        val node = editableNodeFor(event) ?: run { scheduleHide(); return }
 
         val full = node.text?.toString() ?: ""
         // Where is the cursor? Fall back to end of text.
@@ -63,7 +75,7 @@ class KeywordAccessibilityService : AccessibilityService() {
                 return
             }
         }
-        hideBar()
+        scheduleHide()
     }
 
     /**
@@ -90,6 +102,7 @@ class KeywordAccessibilityService : AccessibilityService() {
     }
 
     private fun showBar(matches: List<String>) {
+        handler.removeCallbacks(hideRunnable) // a real match arrived; cancel any pending hide
         val wm = windowManager ?: return
         ensureBar(wm)
         val container = bar ?: return
@@ -184,10 +197,18 @@ class KeywordAccessibilityService : AccessibilityService() {
         barVisible = visible
     }
 
+    /** Hide right now (used when a keyword is applied or the service stops). */
     private fun hideBar() {
+        handler.removeCallbacks(hideRunnable)
         if (!barVisible) return
         setBarVisible(false)
         lastMatches = emptyList()
+    }
+
+    /** Hide shortly, unless a matching keystroke arrives first and cancels it. */
+    private fun scheduleHide() {
+        handler.removeCallbacks(hideRunnable)
+        handler.postDelayed(hideRunnable, hideDelayMs)
     }
 
     /**
@@ -231,6 +252,7 @@ class KeywordAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        handler.removeCallbacks(hideRunnable)
         scrollView?.let { windowManager?.removeView(it) }
         scrollView = null
         bar = null
