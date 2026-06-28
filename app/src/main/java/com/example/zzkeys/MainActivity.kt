@@ -8,9 +8,12 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : AppCompatActivity() {
 
@@ -21,12 +24,20 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 64, 48, 48)
+            // Left/right padding only; top/bottom come from window insets below so the
+            // content clears the status bar, navigation bar and (when open) the keyboard.
+            setPadding(48, 24, 48, 24)
         }
 
         root.addView(TextView(this).apply {
-            text = "zzkeys\n\n" +
-                "1. Tap \"Open Accessibility settings\" and enable \"zzkeys autocomplete\".\n" +
+            text = "zzkeys"
+            textSize = 24f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, 0, 0, 16)
+        })
+
+        root.addView(TextView(this).apply {
+            text = "1. Tap \"Open Accessibility settings\" and enable \"zzkeys autocomplete\".\n" +
                 "2. Come back here and type in the test box. Try \"zzj\".\n" +
                 "3. Tap a suggestion in the bar above the keyboard.\n\n" +
                 "Edit your keywords below (one per line) and tap Save — no rebuild needed."
@@ -78,6 +89,21 @@ class MainActivity : AppCompatActivity() {
             setPadding(24, 48, 24, 48)
         })
 
-        setContentView(root)
+        // Android 15 (targetSdk 35) forces edge-to-edge, so the activity draws behind the
+        // status and navigation bars. Wrap in a ScrollView and pad it by the system-bar +
+        // IME insets so nothing is hidden under the bars and everything stays reachable.
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(root)
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(scroll) { v, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime()
+            )
+            v.setPadding(v.paddingLeft, bars.top, v.paddingRight, bars.bottom)
+            insets
+        }
+
+        setContentView(scroll)
     }
 }
