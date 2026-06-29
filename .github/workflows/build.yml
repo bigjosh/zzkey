@@ -31,6 +31,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug APK
+        env:
+          # Drives versionCode/versionName so each published build is a distinct version.
+          ZZKEYS_VERSION_CODE: ${{ github.run_number }}
         run: gradle assembleDebug --no-daemon
 
       - name: Upload APK artifact
@@ -41,15 +44,18 @@ jobs:
 
       # On main, also publish the APK as a release asset. Unlike Actions artifacts
       # (which always download as a .zip), a release asset downloads as the raw .apk,
-      # so the link below is directly tappable/installable on the phone. The "latest"
-      # tag rolls forward each build, so this URL is permanent and always newest:
+      # so the link below is directly tappable/installable on the phone.
+      #
+      # Each build gets a UNIQUE, increasing tag (v1.0.<build#>) so update-trackers like
+      # Obtainium — which read the version from the release tag — detect new builds. With
+      # make_latest: true, this stays the "latest" release, so the permanent URL still works:
       #   https://github.com/bigjosh/zzkey/releases/latest/download/app-debug.apk
-      - name: Publish APK to "latest" release
+      - name: Publish APK to a versioned release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: Latest debug build
+          tag_name: v1.0.${{ github.run_number }}
+          name: zzkeys v1.0.${{ github.run_number }}
           make_latest: true
           body: |
             Auto-built debug APK. On your phone, tap **app-debug.apk** below to install.

@@ -3,6 +3,11 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// versionCode comes from the CI build number (github.run_number, passed in as an env var)
+// so every published build is a distinct, increasing version that updaters like Obtainium
+// recognize as an update. Local builds with no env var fall back to 1.
+def ciVersionCode = (System.getenv("ZZKEYS_VERSION_CODE") ?: "1").toInteger()
+
 android {
     namespace 'com.example.zzkeys'
     compileSdk 35
@@ -11,8 +16,8 @@ android {
         applicationId "com.example.zzkeys"
         minSdk 30
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
+        versionCode ciVersionCode
+        versionName "1.0.${ciVersionCode}"
     }
 
     buildTypes {
